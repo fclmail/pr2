@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flash Loan Arbitrage Interface</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers/dist/ethers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@uniswap/sdk@3.0.3/dist/sdk.umd.js"></script>
+  <style>
+    body {
+      background-color: #001f00;
+      color: #39ff14;
+      font-family: monospace;
+      padding: 20px;
+    }
+    input, select, button {
+      background-color: #003300;
+      color: #39ff14;
+      border: 1px solid #39ff14;
+      padding: 10px;
+      margin: 5px;
+    }
+    .log {
+      margin-top: 20px;
+      padding: 10px;
+      height: 300px;
+      overflow-y: scroll;
+      background-color: #002200;
+      border: 1px solid #39ff14;
+    }
+    .title {
+      font-size: 1.5em;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="title">Flash Loan Arbitrage Dashboard</div>
+
+  <button onclick="connectWallet()">🔌 Connect Wallet</button><br/>
+
+  <label>Token Address: </label>
+  <input type="text" id="tokenAddress" placeholder="0x..." />
+  <span id="tokenSymbol"></span><br/>
+
+  <label>Flash Loan Amount: </label>
+  <input type="text" id="flashAmount" placeholder="e.g. 1000" /><br/>
+
+  <label>Manual Slippage (%): </label>
+  <input type="number" id="slippage" value="0.05" step="0.01" /><br/>
+
+  <label>Estimated Gas Cost ($): </label>
+  <input type="number" id="gasCost" value="0.2" step="0.01" /><br/>
+
+  <label>Flash Loan Provider: </label>
+  <select id="loanProvider">
+    <option value="Balancer">Balancer</option>
+    <option value="Aave">Aave</option>
+    <option value="DODO">DODO</option>
+    <option value="Dfyn">Dfyn</option>
+  </select><br/>
+
+  <button onclick="startScan()">Start Profit Scan</button>
+  <button onclick="withdrawProfits()">Withdraw Profits</button>
+  <label><input type="checkbox" id="autotradeToggle" /> AUTOTRADE</label><br/>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    let signer;
+    let connected = false;
+    const logBox = document.getElementById('log');
+    const CONTRACT_ADDRESS = "0x7a866542bde32A1Ba1d7F86a24B84A51f849050a";
+
+    const CONTRACT_ABI = [
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "tokenAddress",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "loanAmount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "expectedReturn",
+				"type": "uint256"
+			},
+			{
+				"internalType": "string",
+				"name": "provider",
+				"type": "string"
+			}
+		],
+		"name": "executeFlashLoan",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "profit",
+				"type": "uint256"
+			}
+		],
+		"name": "FlashLoanCompleted",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "provider",
+				"type": "string"
+			}
+		],
+		"name": "FlashLoanExecuted",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "profit",
+				"type": "uint256"
+			}
+		],
+		"name": "ProfitsSentToOwner",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "gasBuffer",
+				"type": "uint256"
+			}
+		],
+		"name": "setGasEstimateBuffer",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "bps",
+				"type": "uint256"
+			}
+		],
+		"name": "setMinProfitBps",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "wallet",
+				"type": "address"
+			}
+		],
+		"name": "WalletConnected",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			}
+		],
+		"name": "withdrawProfits",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"stateMutability": "payable",
+		"type": "receive"
+	},
+	{
+		"inputs": [],
+		"name": "gasEstimateBuffer",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "minProfitBasisPoints",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	}
+];
+
+    const log = (msg) => {
+      const time = new Date().toLocaleString();
+      logBox.innerHTML = `[${time}] ${msg}<br/>` + logBox.innerHTML;
+    };
+
+    const tokenInput = document.getElementById('tokenAddress');
+    const symbolSpan = document.getElementById('tokenSymbol');
+    tokenInput.addEventListener('blur', async () => {
+      const tokenAddr = tokenInput.value;
+      if (!ethers.utils.isAddress(tokenAddr)) return;
+      const erc20 = new ethers.Contract(tokenAddr, ["function symbol() view returns (string)"], provider);
+      try {
+        const symbol = await erc20.symbol();
+        symbolSpan.innerText = `(${symbol})`;
+      } catch (e) {
+        symbolSpan.innerText = "";
+      }
+    });
+
+    async function connectWallet() {
+      try {
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        const address = await signer.getAddress();
+        connected = true;
+        log(`✅ Wallet connected successfully: ${address}`);
+      } catch (err) {
+        log(`❌ Wallet connection failed: ${err.message}`);
+      }
+    }
+
+    async function startScan() {
+      if (!connected) await connectWallet();
+      const token = document.getElementById('tokenAddress').value;
+      const amount = document.getElementById('flashAmount').value;
+      const slippage = document.getElementById('slippage').value;
+      const gasCost = parseFloat(document.getElementById('gasCost').value);
+      const providerName = document.getElementById('loanProvider').value;
+
+      log(`Scanning ${providerName} for flash loan opportunity with ${amount} ${token}...`);
+
+      const routers = {
+        SushiSwap: '0x1b02da8cb0d097eb8d57a175b88c7d8b47997506',
+        QuickSwap: '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff',
+        Dfyn: '0x5a46c45a7c4b6778c75e4f1999b85bb8c0a0ff42',
+        CafeSwap: '0x9055682E58C74fc8DdBFC55Ad2428aB1F96098Fc',
+        ApeSwap: '0xCf083Be4164828f00cAE704EC15a36D711491284'
+      };
+
+      const usdc = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+      const tokenIn = usdc;
+      const tokenOut = token;
+
+      try {
+        const amountIn = ethers.utils.parseUnits(amount, 6); // USDC = 6 decimals
+        const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"];
+
+        const best = { profit: 0, buy: null, sell: null };
+        const names = Object.keys(routers);
+
+        for (let i = 0; i < names.length; i++) {
+          for (let j = 0; j < names.length; j++) {
+            if (i === j) continue;
+            const buyRouter = new ethers.Contract(routers[names[i]], routerAbi, provider);
+            const sellRouter = new ethers.Contract(routers[names[j]], routerAbi, provider);
+            try {
+              const amountOut = await buyRouter.getAmountsOut(amountIn, [tokenIn, tokenOut]);
+              const amountBack = await sellRouter.getAmountsOut(amountOut[1], [tokenOut, tokenIn]);
+              const returned = parseFloat(ethers.utils.formatUnits(amountBack[1], 6));
+              const profit = returned - parseFloat(amount);
+              if (profit > best.profit) best.profit = profit, best.buy = names[i], best.sell = names[j];
+            } catch {}
+          }
+        }
+
+        log(`Best route: Buy on ${best.buy}, Sell on ${best.sell}, Profit: $${best.profit.toFixed(4)}`);
+        if (best.profit > gasCost) {
+          log(`✅ Profitable. Executing flash loan on ${providerName}`);
+          const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+          const tx = await contract.executeFlashLoan(providerName, token, amountIn);
+          log(`🔁 Flash loan tx sent: ${tx.hash}`);
+          await tx.wait();
+          log(`✅ Flash loan completed.`);
+        } else {
+          log("❌ Not profitable. Skipping.");
+        }
+      } catch (err) {
+        log(`⚠️ Error: ${err.message}`);
+      }
+    }
+
+    async function withdrawProfits() {
+      if (!connected) await connectWallet();
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      try {
+        const tx = await contract.withdrawProfits();
+        log(`💸 Withdraw tx sent: ${tx.hash}`);
+        await tx.wait();
+        log(`✅ Profits withdrawn.`);
+      } catch (e) {
+        log(`⚠️ Withdraw failed: ${e.message}`);
+      }
+    }
+
+    setInterval(() => {
+      if (document.getElementById('autotradeToggle').checked) startScan();
+    }, 10000);
+  </script>
+</body>
+</html>
